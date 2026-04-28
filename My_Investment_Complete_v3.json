@@ -1,0 +1,165 @@
+{
+  "name": "PAXG Complete Strategy v3 - WhatsApp",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-800, 0],
+      "id": "schedule-5min",
+      "name": "Schedule Trigger 5 Menit"
+    },
+    {
+      "parameters": {
+        "url": "https://www.tokocrypto.site/api/v3/ticker/price?symbol=PAXGUSDT",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-580, -120],
+      "id": "fetch-paxg",
+      "name": "Ambil Harga PAXG"
+    },
+    {
+      "parameters": {
+        "url": "https://www.tokocrypto.site/api/v3/ticker/price?symbol=USDTIDR",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-580, 40],
+      "id": "fetch-usdt",
+      "name": "Ambil Kurs USDT/IDR"
+    },
+    {
+      "parameters": {
+        "url": "=https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/gviz/tq?tqx=out:json&sheet=INVEST+EMAS",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-580, 200],
+      "id": "fetch-gsheet",
+      "name": "Baca Sheet INVEST EMAS"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ================================================================\n// KONFIGURASI\n// ================================================================\nconst PCT_ANCHOR    = 45;\nconst PCT_DIP       = 35;\nconst PCT_DEEP_DIP  = 25;\n\nconst DIP_THRESHOLD      = 3.0;\nconst DEEP_DIP_THRESHOLD = 5.0;\nconst TP1_PCT            = 2.0;\nconst TP2_PCT            = 4.0;\nconst COOLDOWN_MINUTES   = 60;\nconst TROY_OZ_TO_GRAM    = 31.1034768;\n\n// ================================================================\n// HELPER\n// ================================================================\nconst formatIDR = (n) =>\n  new Intl.NumberFormat('id-ID', {\n    style: 'currency', currency: 'IDR',\n    minimumFractionDigits: 0, maximumFractionDigits: 0\n  }).format(Math.round(n));\n\nconst fmt = (n, d = 2) => Number(n).toFixed(d);\n\nconst nowUTC     = new Date();\nconst nowWITA    = new Date(nowUTC.getTime() + 8 * 60 * 60 * 1000);\nconst todayDate  = nowWITA.getDate();\nconst todayMonth = nowWITA.getMonth();\nconst todayYear  = nowWITA.getFullYear();\nconst timeLabel  = nowWITA.toLocaleString('id-ID', { timeZone: 'Asia/Makassar' });\nconst nowMs      = Date.now();\nconst CD_MS      = COOLDOWN_MINUTES * 60 * 1000;\n\nconst tanggalPanjang = nowWITA.toLocaleDateString('id-ID', {\n  weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'\n});\n\n// ================================================================\n// ANCHOR DATE\n// ================================================================\nfunction getAnchorDate() {\n  let anchorMonth, anchorYear;\n  if (todayDate <= 25) {\n    if (todayMonth === 0) { anchorMonth = 11; anchorYear = todayYear - 1; }\n    else                  { anchorMonth = todayMonth - 1; anchorYear = todayYear; }\n  } else {\n    anchorMonth = todayMonth;\n    anchorYear  = todayYear;\n  }\n  return new Date(anchorYear, anchorMonth, 25);\n}\n\nconst anchorTarget    = getAnchorDate();\nconst anchorDateLabel = anchorTarget.toLocaleDateString('id-ID', {\n  day: 'numeric', month: 'long', year: 'numeric'\n});\nconst bulanSiklus = anchorTarget.toLocaleDateString('id-ID', {\n  month: 'long', year: 'numeric'\n});\n\n// ================================================================\n// PARSE GOOGLE SHEETS\n// ================================================================\nconst rawText  = $('Baca Sheet INVEST EMAS').first().json.data;\nconst jsonText = rawText.replace(/^[^\\(]+\\(/, '').replace(/\\);?\\s*$/, '');\nconst gviz     = JSON.parse(jsonText);\nconst cols     = gviz.table.cols.map(c => c.label.trim());\nconst rows     = gviz.table.rows;\n\nconst COL = {\n  anchorDate    : cols.indexOf('ANCHOR DATE'),\n  anchorPrice   : cols.indexOf('ANCHOR PRICE'),\n  anchorDeposit : cols.indexOf('ANCHOR DEPOSIT'),\n  dipDate       : cols.indexOf('DIP BUY DATE'),\n  dipPrice      : cols.indexOf('DIP BUY PRICE'),\n  dipDeposit    : cols.indexOf('DIP BUY DEPOSIT'),\n  deepDate      : cols.indexOf('DEEP DIP DATE'),\n  deepPrice     : cols.indexOf('DEEP DIP PRICE'),\n  deepDeposit   : cols.indexOf('DEEP DIP DEPOSIT'),\n  totalDeposit  : cols.indexOf('TOTAL DEPOSIT'),\n  totalBudget   : cols.indexOf('TOTAL BUDGET'),\n  swingEntryAvg : cols.indexOf('SWING ENTRY AVG'),\n  swingAmmo     : cols.indexOf('SWING AMMO IDR')\n};\n\nif (COL.anchorDate < 0 || COL.anchorPrice < 0) {\n  throw new Error('Kolom ANCHOR DATE / ANCHOR PRICE tidak ditemukan.');\n}\n\nconst getCellVal = (row, colIdx) => {\n  if (colIdx < 0) return null;\n  const cell = row.c[colIdx];\n  return (cell && cell.v !== null && cell.v !== undefined) ? cell.v : null;\n};\n\nfunction parseGSheetDate(raw) {\n  if (!raw) return null;\n  if (typeof raw === 'string' && raw.startsWith('Date(')) {\n    const p = raw.replace('Date(','').replace(')','').split(',').map(Number);\n    return new Date(p[0], p[1], p[2]);\n  }\n  if (typeof raw === 'string' && raw.includes('/')) {\n    const [d,m,y] = raw.split('/').map(Number);\n    return new Date(y, m-1, d);\n  }\n  if (typeof raw === 'number') return new Date((raw - 25569) * 86400 * 1000);\n  return null;\n}\n\nlet anchorPriceUSD = null, anchorDeposit = null;\nlet dipPriceUSD    = null, dipDeposit    = null;\nlet deepPriceUSD   = null, deepDeposit   = null;\nlet totalBudgetIDR = null, totalDeposit  = null;\nlet swingEntryAvg  = null, swingAmmoIDR  = null;\nlet anchorFilled   = false, dipFilled = false, deepFilled = false;\n\nfor (const row of rows) {\n  const rowDate = parseGSheetDate(getCellVal(row, COL.anchorDate));\n  if (!rowDate) continue;\n  if (\n    rowDate.getFullYear() === anchorTarget.getFullYear() &&\n    rowDate.getMonth()    === anchorTarget.getMonth()    &&\n    rowDate.getDate()     === anchorTarget.getDate()\n  ) {\n    anchorPriceUSD = Number(getCellVal(row, COL.anchorPrice))   || null;\n    anchorDeposit  = Number(getCellVal(row, COL.anchorDeposit)) || null;\n    dipPriceUSD    = COL.dipPrice    >= 0 ? Number(getCellVal(row, COL.dipPrice))    || null : null;\n    dipDeposit     = COL.dipDeposit  >= 0 ? Number(getCellVal(row, COL.dipDeposit))  || null : null;\n    deepPriceUSD   = COL.deepPrice   >= 0 ? Number(getCellVal(row, COL.deepPrice))   || null : null;\n    deepDeposit    = COL.deepDeposit >= 0 ? Number(getCellVal(row, COL.deepDeposit)) || null : null;\n    totalBudgetIDR = COL.totalBudget >= 0 ? Number(getCellVal(row, COL.totalBudget)) || null : null;\n    totalDeposit   = COL.totalDeposit >= 0 ? Number(getCellVal(row, COL.totalDeposit)) || null : null;\n    swingEntryAvg  = COL.swingEntryAvg >= 0 ? Number(getCellVal(row, COL.swingEntryAvg)) || null : null;\n    swingAmmoIDR   = COL.swingAmmo  >= 0 ? Number(getCellVal(row, COL.swingAmmo))   || null : null;\n    anchorFilled   = !!(anchorPriceUSD && anchorPriceUSD > 0);\n    dipFilled      = !!(dipPriceUSD    && dipPriceUSD    > 0);\n    deepFilled     = !!(deepPriceUSD   && deepPriceUSD   > 0);\n    break;\n  }\n}\n\nlet fallbackAnchorUSD = anchorPriceUSD;\nif (!fallbackAnchorUSD) {\n  for (let i = rows.length - 1; i >= 0; i--) {\n    const val = Number(getCellVal(rows[i], COL.anchorPrice));\n    if (!isNaN(val) && val > 0) { fallbackAnchorUSD = val; break; }\n  }\n}\n\n// ================================================================\n// HARGA SEKARANG\n// ================================================================\nconst currentPaxgUSD = Number($('Ambil Harga PAXG').first().json.price);\nconst usdtIdr        = Number($('Ambil Kurs USDT/IDR').first().json.price);\nif (isNaN(currentPaxgUSD)) throw new Error('Harga PAXG tidak valid');\nif (isNaN(usdtIdr))        throw new Error('Kurs USDT/IDR tidak valid');\n\nconst paxgIdrPerGram = (currentPaxgUSD / TROY_OZ_TO_GRAM) * usdtIdr;\n\n// ================================================================\n// BUDGET\n// ================================================================\nconst safeTotal = totalBudgetIDR || 4000000;\nconst safeAmmo  = swingAmmoIDR   || 10000000;\n\nconst budgetAnchor  = safeTotal * (PCT_ANCHOR   / 100);\nconst budgetDip     = safeTotal * (PCT_DIP      / 100);\nconst budgetDeepDip = safeTotal * (PCT_DEEP_DIP / 100);\n\n// ================================================================\n// DROP & GAIN %\n// ================================================================\nconst dropPct = fallbackAnchorUSD\n  ? ((fallbackAnchorUSD - currentPaxgUSD) / fallbackAnchorUSD) * 100\n  : null;\n\nconst gainPct = (swingEntryAvg && swingEntryAvg > 0)\n  ? ((currentPaxgUSD - swingEntryAvg) / swingEntryAvg) * 100\n  : null;\n\n// ================================================================\n// STATIC DATA\n// ================================================================\nconst sd = $getWorkflowStaticData('global');\n\nconst dipDraftKey  = `draftDip_${anchorTarget.getFullYear()}_${anchorTarget.getMonth()}`;\nconst deepDraftKey = `draftDeep_${anchorTarget.getFullYear()}_${anchorTarget.getMonth()}`;\nconst tp1DraftKey  = `draftTP1_${anchorTarget.getFullYear()}_${anchorTarget.getMonth()}_${Math.floor(nowMs/(24*60*60*1000))}`;\nconst tp2DraftKey  = `draftTP2_${anchorTarget.getFullYear()}_${anchorTarget.getMonth()}_${Math.floor(nowMs/(24*60*60*1000))}`;\n\n// ================================================================\n// HEADER HARGA\n// ================================================================\nconst headerPrice =\n  `🕐 ${timeLabel} WITA\\n` +\n  `💹 PAXG : $${fmt(currentPaxgUSD)} / troy oz\\n` +\n  `💱 Kurs : ${formatIDR(usdtIdr)} / USDT\\n` +\n  `💵 /gram: ${formatIDR(paxgIdrPerGram)}\\n`;\n\nconst budgetBlock =\n  `📊 Budget ${bulanSiklus}: ${formatIDR(safeTotal)}\\n` +\n  `   Anchor  (${PCT_ANCHOR}%): ${formatIDR(budgetAnchor)}\\n` +\n  `   Dip     (${PCT_DIP}%): ${formatIDR(budgetDip)}\\n` +\n  `   Deep    (${PCT_DEEP_DIP}%): ${formatIDR(budgetDeepDip)}\\n`;\n\n// ================================================================\n// ALERTS\n// ================================================================\nconst alerts = [];\n\n// ─── ANCHOR REMINDER ────────────────────────────────────────────\nif (todayDate === 25 && !anchorFilled && (nowMs - (sd.lastAnchorReminder||0)) >= 60*60*1000) {\n  sd.lastAnchorReminder = nowMs;\n  alerts.push({\n    type: 'ANCHOR_REMINDER',\n    message:\n      `📌 *REMINDER — ANCHOR BUY BELUM DILAKUKAN*\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `${headerPrice}` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `📅 Anchor date: *${anchorDateLabel}*\\n` +\n      `⚠️ ANCHOR PRICE di sheet masih kosong!\\n\\n` +\n      `${budgetBlock}` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `👉 Beli anchor sekarang & isi sheet!`\n  });\n}\n\n// ─── DIP BUY ALERT ──────────────────────────────────────────────\nif (dropPct !== null && dropPct >= DIP_THRESHOLD && dropPct < DEEP_DIP_THRESHOLD && (nowMs - (sd.lastDipAlert||0)) > CD_MS) {\n  sd.lastDipAlert = nowMs;\n  alerts.push({\n    type: 'DIP_BUY',\n    message:\n      `⚠️ *DIP BUY ALERT (≥${DIP_THRESHOLD}%)*\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `${headerPrice}` +\n      `📅 Anchor : ${anchorDateLabel}\\n` +\n      `🎯 Anchor : $${fmt(fallbackAnchorUSD)}\\n` +\n      `📉 Turun  : *${fmt(dropPct)}%* dari anchor\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `💰 Alokasi Dip (${PCT_DIP}%): *${formatIDR(budgetDip)}*\\n` +\n      `${budgetBlock}` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `✅ Eksekusi → isi sheet → draft thread otomatis terkirim`\n  });\n}\n\n// ─── DEEP DIP ALERT ─────────────────────────────────────────────\nif (dropPct !== null && dropPct >= DEEP_DIP_THRESHOLD && (nowMs - (sd.lastDeepAlert||0)) > CD_MS) {\n  sd.lastDeepAlert = nowMs;\n  alerts.push({\n    type: 'DEEP_DIP',\n    message:\n      `🚨 *DEEP DIP ALERT (≥${DEEP_DIP_THRESHOLD}%) — BELI SEKARANG!*\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `${headerPrice}` +\n      `📅 Anchor : ${anchorDateLabel}\\n` +\n      `🎯 Anchor : $${fmt(fallbackAnchorUSD)}\\n` +\n      `📉 Turun  : *${fmt(dropPct)}%* dari anchor\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `💰 Alokasi Deep (${PCT_DEEP_DIP}%): *${formatIDR(budgetDeepDip)}*\\n` +\n      `${budgetBlock}` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `⚡ Eksekusi → isi sheet → draft thread otomatis terkirim`\n  });\n}\n\n// ─── TP1 ALERT ──────────────────────────────────────────────────\nif (gainPct !== null && gainPct >= TP1_PCT && gainPct < TP2_PCT && (nowMs - (sd.lastTP1||0)) > CD_MS) {\n  sd.lastTP1 = nowMs;\n  alerts.push({\n    type: 'TP1',\n    message:\n      `✅ *TAKE PROFIT 1 — JUAL 50% POSISI*\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `${headerPrice}` +\n      `📈 Entry avg : $${fmt(swingEntryAvg)}\\n` +\n      `📈 Gain      : *+${fmt(gainPct)}%* dari entry\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `💰 Jual 50% posisi sekarang\\n` +\n      `🎯 TP2 target: $${fmt(swingEntryAvg * (1 + TP2_PCT/100))} (+${TP2_PCT}%)\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `✅ Eksekusi → isi sheet → draft thread otomatis terkirim`\n  });\n}\n\n// ─── TP2 ALERT ──────────────────────────────────────────────────\nif (gainPct !== null && gainPct >= TP2_PCT && (nowMs - (sd.lastTP2||0)) > CD_MS) {\n  sd.lastTP2 = nowMs;\n  alerts.push({\n    type: 'TP2',\n    message:\n      `🎉 *TAKE PROFIT 2 — JUAL SEMUA POSISI!*\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `${headerPrice}` +\n      `📈 Entry avg : $${fmt(swingEntryAvg)}\\n` +\n      `📈 Gain      : *+${fmt(gainPct)}%* dari entry\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `💰 Jual SEMUA sisa posisi\\n` +\n      `🔄 Kosongkan SWING ENTRY AVG di sheet setelah jual\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `🎉 Eksekusi → isi sheet → draft thread otomatis terkirim`\n  });\n}\n\n// ================================================================\n// DRAFT THREAD — kalimat posting siap publish\n// ================================================================\n\n// ─── DRAFT DIP BUY ──────────────────────────────────────────────\nif (dipFilled && !sd[dipDraftKey]) {\n  sd[dipDraftKey] = true;\n  const actualDrop = ((fallbackAnchorUSD - dipPriceUSD) / fallbackAnchorUSD * 100);\n  const gramDip    = dipDeposit ? dipDeposit / ((dipPriceUSD / TROY_OZ_TO_GRAM) * usdtIdr) : null;\n  const paxgIdrDip = (dipPriceUSD / TROY_OZ_TO_GRAM) * usdtIdr;\n\n  alerts.push({\n    type: 'DRAFT_DIP',\n    message:\n      `📝 *DRAFT THREAD — SIAP PUBLISH*\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `Salin teks di bawah ini ke Thread / X / sosmed:\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n\\n` +\n\n      `📅 Update Investasi Emas — ${tanggalPanjang}\\n\\n` +\n\n      `Hari ini saya mengeksekusi *Dip Buy* pada instrumen PAXG (PAX Gold).\\n\\n` +\n\n      `Harga emas terkoreksi ${fmt(actualDrop)}% dari harga referensi anchor bulan ini ` +\n      `($${fmt(fallbackAnchorUSD)}/troy oz), sehingga saya memanfaatkan momentum ini ` +\n      `untuk menambah posisi sesuai strategi DCA 3-tier yang saya jalankan.\\n\\n` +\n\n      `📊 Detail Transaksi:\\n` +\n      `• Instrumen  : PAXG (1 PAXG = 1 troy oz emas)\\n` +\n      `• Harga beli : $${fmt(dipPriceUSD)}/troy oz (${formatIDR(paxgIdrDip)}/gram)\\n` +\n      `• Deposit    : ${formatIDR(dipDeposit)}\\n` +\n      (gramDip ? `• Estimasi   : ~${fmt(gramDip, 4)} gram emas\\n` : '') +\n      `• Koreksi    : −${fmt(actualDrop)}% dari anchor\\n\\n` +\n\n      `📐 Tentang Strategi:\\n` +\n      `Saya menggunakan strategi DCA 3-tier untuk akumulasi emas digital (PAXG):\\n` +\n      `• Anchor Buy (${PCT_ANCHOR}%) — rutin setiap tanggal 25\\n` +\n      `• Dip Buy (${PCT_DIP}%)    — saat harga turun ≥3% dari anchor\\n` +\n      `• Deep Dip (${PCT_DEEP_DIP}%)  — saat harga turun ≥5% dari anchor\\n\\n` +\n\n      `PAXG dipilih karena didukung emas fisik, spread hanya ~0,3%, dan dapat dikonversi ke emas batangan fisik sewaktu-waktu.\\n\\n` +\n\n      `#Emas #PAXG #DipBuy #InvestasiEmas #DCA`\n  });\n}\n\n// ─── DRAFT DEEP DIP ─────────────────────────────────────────────\nif (deepFilled && !sd[deepDraftKey]) {\n  sd[deepDraftKey] = true;\n  const actualDrop = ((fallbackAnchorUSD - deepPriceUSD) / fallbackAnchorUSD * 100);\n  const gramDeep   = deepDeposit ? deepDeposit / ((deepPriceUSD / TROY_OZ_TO_GRAM) * usdtIdr) : null;\n  const paxgIdrDeep = (deepPriceUSD / TROY_OZ_TO_GRAM) * usdtIdr;\n\n  alerts.push({\n    type: 'DRAFT_DEEP',\n    message:\n      `📝 *DRAFT THREAD — SIAP PUBLISH*\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `Salin teks di bawah ini ke Thread / X / sosmed:\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n\\n` +\n\n      `📅 Update Investasi Emas — ${tanggalPanjang}\\n\\n` +\n\n      `Hari ini saya mengeksekusi *Deep Dip Buy* pada instrumen PAXG (PAX Gold).\\n\\n` +\n\n      `Koreksi harga emas mencapai ${fmt(actualDrop)}% dari anchor bulan ini ` +\n      `($${fmt(fallbackAnchorUSD)}/troy oz) — ini adalah level deep dip yang saya tunggu ` +\n      `untuk mengalokasikan sisa amunisi beli sesuai strategi.\\n\\n` +\n\n      `📊 Detail Transaksi:\\n` +\n      `• Instrumen  : PAXG (1 PAXG = 1 troy oz emas)\\n` +\n      `• Harga beli : $${fmt(deepPriceUSD)}/troy oz (${formatIDR(paxgIdrDeep)}/gram)\\n` +\n      `• Deposit    : ${formatIDR(deepDeposit)}\\n` +\n      (gramDeep ? `• Estimasi   : ~${fmt(gramDeep, 4)} gram emas\\n` : '') +\n      `• Koreksi    : −${fmt(actualDrop)}% dari anchor\\n\\n` +\n\n      `📐 Tentang Strategi:\\n` +\n      `Strategi DCA 3-tier yang saya jalankan:\\n` +\n      `• Anchor Buy (${PCT_ANCHOR}%) — rutin setiap tanggal 25\\n` +\n      `• Dip Buy (${PCT_DIP}%)    — harga turun ≥3% dari anchor\\n` +\n      `• Deep Dip (${PCT_DEEP_DIP}%)  — harga turun ≥5% dari anchor\\n\\n` +\n\n      `Setelah 3 tier terpenuhi, tidak ada pembelian tambahan di siklus ini. ` +\n      `Posisi di-hold hingga target take profit tercapai atau siklus berikutnya dimulai.\\n\\n` +\n\n      `#Emas #PAXG #DeepDip #InvestasiEmas #DCA`\n  });\n}\n\n// ─── DRAFT TP1 ──────────────────────────────────────────────────\nif (gainPct !== null && gainPct >= TP1_PCT && !sd[tp1DraftKey]) {\n  sd[tp1DraftKey] = true;\n  const profitPct  = gainPct - 0.6; // net setelah spread\n  const tp2Target  = swingEntryAvg * (1 + TP2_PCT / 100);\n\n  alerts.push({\n    type: 'DRAFT_TP1',\n    message:\n      `📝 *DRAFT THREAD — SIAP PUBLISH*\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `Salin teks di bawah ini ke Thread / X / sosmed:\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n\\n` +\n\n      `📅 Update Investasi Emas — ${tanggalPanjang}\\n\\n` +\n\n      `Hari ini saya merealisasikan *Take Profit pertama (TP1)* pada posisi swing PAXG saya.\\n\\n` +\n\n      `Harga telah naik +${fmt(gainPct)}% dari rata-rata harga beli saya ` +\n      `($${fmt(swingEntryAvg)}/troy oz), sehingga saya memutuskan untuk menjual 50% posisi ` +\n      `di harga $${fmt(currentPaxgUSD)}/troy oz sesuai rencana awal.\\n\\n` +\n\n      `📊 Detail:\\n` +\n      `• Entry avg  : $${fmt(swingEntryAvg)}/troy oz\\n` +\n      `• Harga TP1  : $${fmt(currentPaxgUSD)}/troy oz\\n` +\n      `• Gain gross : +${fmt(gainPct)}%\\n` +\n      `• Net profit : ~+${fmt(profitPct)}% (setelah spread ~0,3% × 2)\\n` +\n      `• Aksi       : Jual 50% posisi ✅\\n` +\n      `• Sisa hold  : 50% menunggu TP2\\n\\n` +\n\n      `🎯 Target TP2: $${fmt(tp2Target)}/troy oz (+${TP2_PCT}% dari entry)\\n\\n` +\n\n      `📐 Strategi ini adalah bagian dari *Swing PAXG dengan Floor Fisik* — ` +\n      `trading di atas 40 gram emas fisik yang tidak saya sentuh, ` +\n      `menggunakan amunisi terpisah yang berputar setiap siklus.\\n\\n` +\n\n      `#Emas #PAXG #TakeProfit #SwingTrading #InvestasiEmas`\n  });\n}\n\n// ─── DRAFT TP2 ──────────────────────────────────────────────────\nif (gainPct !== null && gainPct >= TP2_PCT && !sd[tp2DraftKey]) {\n  sd[tp2DraftKey] = true;\n  const profitPct = gainPct - 0.6;\n\n  alerts.push({\n    type: 'DRAFT_TP2',\n    message:\n      `📝 *DRAFT THREAD — SIAP PUBLISH*\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `Salin teks di bawah ini ke Thread / X / sosmed:\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n\\n` +\n\n      `📅 Update Investasi Emas — ${tanggalPanjang}\\n\\n` +\n\n      `Hari ini satu siklus swing PAXG saya selesai dengan merealisasikan *Take Profit kedua (TP2)* — full exit dari posisi.\\n\\n` +\n\n      `Harga mencapai +${fmt(gainPct)}% dari rata-rata entry saya ` +\n      `($${fmt(swingEntryAvg)}/troy oz), melebihi target TP2 yang sudah saya tetapkan sejak awal. ` +\n      `Seluruh sisa posisi dijual di $${fmt(currentPaxgUSD)}/troy oz.\\n\\n` +\n\n      `📊 Ringkasan Siklus:\\n` +\n      `• Entry avg  : $${fmt(swingEntryAvg)}/troy oz\\n` +\n      `• Harga TP2  : $${fmt(currentPaxgUSD)}/troy oz\\n` +\n      `• Gain gross : +${fmt(gainPct)}%\\n` +\n      `• Net profit : ~+${fmt(profitPct)}% (setelah spread ~0,3% × 2)\\n` +\n      `• Status     : Full exit ✅ Siklus selesai\\n\\n` +\n\n      `🔄 Amunisi swing direset untuk siklus berikutnya.\\n` +\n      `🪨 Floor 40 gram emas fisik tetap utuh — tidak disentuh sepanjang siklus.\\n\\n` +\n\n      `📐 Prinsip strategi ini sederhana:\\n` +\n      `Beli saat koreksi, realisasi profit secara bertahap, dan selalu ada ` +\n      `aset fisik sebagai \"lantai\" yang tidak dijual dalam kondisi apapun.\\n\\n` +\n\n      `#Emas #PAXG #TakeProfit #SwingTrading #InvestasiEmas #FullExit`\n  });\n}\n\n// ================================================================\n// OUTPUT\n// ================================================================\nif (alerts.length === 0) {\n  return [{ json: { should_alert: false } }];\n}\n\nreturn alerts.map(a => ({\n  json: {\n    should_alert  : true,\n    alert_type    : a.type,\n    alert_message : a.message\n  }\n}));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-240, 60],
+      "id": "main-logic",
+      "name": "Main Logic — Alert & Draft Thread"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-alert",
+              "leftValue": "={{ $json.should_alert }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [40, 60],
+      "id": "if-alert",
+      "name": "Perlu Alert?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://fonnte.com/api/send-message",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "FONNTE_TOKEN_KAMU_DI_SINI"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "target",
+              "value": "628XXXXXXXXXX"
+            },
+            {
+              "name": "message",
+              "value": "={{ $json.alert_message }}"
+            },
+            {
+              "name": "countryCode",
+              "value": "62"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 0],
+      "id": "send-wa",
+      "name": "Kirim ke WhatsApp"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger 5 Menit": {
+      "main": [[
+        { "node": "Ambil Harga PAXG",       "type": "main", "index": 0 },
+        { "node": "Ambil Kurs USDT/IDR",     "type": "main", "index": 0 },
+        { "node": "Baca Sheet INVEST EMAS",   "type": "main", "index": 0 }
+      ]]
+    },
+    "Ambil Harga PAXG":     { "main": [[{ "node": "Main Logic — Alert & Draft Thread", "type": "main", "index": 0 }]] },
+    "Ambil Kurs USDT/IDR":  { "main": [[{ "node": "Main Logic — Alert & Draft Thread", "type": "main", "index": 0 }]] },
+    "Baca Sheet INVEST EMAS": { "main": [[{ "node": "Main Logic — Alert & Draft Thread", "type": "main", "index": 0 }]] },
+    "Main Logic — Alert & Draft Thread": { "main": [[{ "node": "Perlu Alert?", "type": "main", "index": 0 }]] },
+    "Perlu Alert?": {
+      "main": [
+        [{ "node": "Kirim ke WhatsApp", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "complete-v3",
+  "meta": { "instanceId": "72a80edf5b86ed56433d12a90231f95d07fc878d856e276201384eb5c08a3e7b" },
+  "id": "paxg-complete-v3",
+  "tags": []
+}

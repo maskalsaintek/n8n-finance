@@ -1,0 +1,15 @@
+metric,value,note
+current_paxg_usd,"=VLOOKUP(""current_paxg_usd"",SETTINGS!$A:$B,2,FALSE)",Harga PAXG terkini
+current_usdt_idr,"=VLOOKUP(""current_usdt_idr"",SETTINGS!$A:$B,2,FALSE)",Kurs USDT IDR terkini
+total_open_qty_paxg,"=IFERROR(LOOKUP(2,1/(TRADE_LOG!$L:$L<>""""),TRADE_LOG!$L:$L),0)",Total posisi PAXG terbuka
+total_open_gram,"=B4*VLOOKUP(""troy_oz_to_gram"",SETTINGS!$A:$B,2,FALSE)",Konversi ke gram
+open_cost_idr,"=IFERROR(LOOKUP(2,1/(TRADE_LOG!$M:$M<>""""),TRADE_LOG!$M:$M),0)",Modal posisi terbuka
+avg_entry_idr_per_paxg,"=IFERROR(LOOKUP(2,1/(TRADE_LOG!$N:$N<>""""),TRADE_LOG!$N:$N),0)",Average cost posisi terbuka
+avg_entry_usd_per_oz,"=IF(OR(B3=0,B7=0),0,B7/B3)",Average entry dalam USD/oz
+market_value_idr,"=B2*B3*B4",Nilai market posisi terbuka
+unrealized_pnl_idr,"=B9-B6",PnL posisi yang belum dijual
+realized_pnl_idr,"=SUM(TRADE_LOG!$P:$P)",PnL posisi yang sudah dijual
+tp1_target_usd,"=IF(B8=0,0,B8*(1+VLOOKUP(""tp1_pct"",SETTINGS!$A:$B,2,FALSE)/100))",Harga target TP1
+tp2_target_usd,"=IF(B8=0,0,B8*(1+VLOOKUP(""tp2_pct"",SETTINGS!$A:$B,2,FALSE)/100))",Harga target TP2
+monthly_budget_idr,"=VLOOKUP(""monthly_budget_idr"",SETTINGS!$A:$B,2,FALSE)",Budget per siklus
+swing_ammo_idr,"=VLOOKUP(""swing_ammo_idr"",SETTINGS!$A:$B,2,FALSE)",Amunisi swing

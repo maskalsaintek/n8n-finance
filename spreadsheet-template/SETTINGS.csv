@@ -1,0 +1,11 @@
+key,value,note
+current_paxg_usd,3500,Update manual atau via automation
+current_usdt_idr,16250,Update manual atau via automation
+tp1_pct,2,Target TP1 persen dari average entry
+tp2_pct,4,Target TP2 persen dari average entry
+dip_threshold_pct,3,Trigger Dip Buy
+deep_dip_threshold_pct,5,Trigger Deep Dip Buy
+troy_oz_to_gram,31.1034768,Konversi 1 troy oz ke gram
+monthly_budget_idr,4000000,Budget DCA per siklus
+swing_ammo_idr,10000000,Amunisi swing terpisah
+anchor_day,25,Tanggal anchor bulanan
