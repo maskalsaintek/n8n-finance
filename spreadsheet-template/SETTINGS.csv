@@ -1,8 +1,7 @@
 key,value,note
-current_paxg_usd,3500,Update manual atau via automation
-current_usdt_idr,16250,Update manual atau via automation
-tp1_pct,2,Target TP1 persen dari average entry
-tp2_pct,4,Target TP2 persen dari average entry
+tp_anchor_pct,2,Target TP posisi anchor dari harga beli anchor
+tp_dip_pct,3,Target TP posisi dip dari harga beli dip
+tp_deep_dip_pct,5,Target TP posisi deep dip dari harga beli deep dip
 dip_threshold_pct,3,Trigger Dip Buy
 deep_dip_threshold_pct,5,Trigger Deep Dip Buy
 troy_oz_to_gram,31.1034768,Konversi 1 troy oz ke gram

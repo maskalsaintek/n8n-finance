@@ -1,0 +1,3 @@
+gross_idr,qty_paxg_net,kurs_paxg_idr,tax_paxg,usdt_idr_input,price_usd_oz_input,gross_qty_paxg_calc,fee_pct_calc,effective_price_idr_per_paxg_calc,price_usd_oz_calc,usdt_idr_calc,note
+,,,,,,"=IF(OR(B2="""",D2=""""),"""",B2+D2)","=IF(G2="""","""",D2/G2)","=IF(OR(A2="""",G2=""""),"""",A2/G2)","=IF(OR(C2="""",E2=""""),"""",C2/E2)","=IF(OR(C2="""",F2=""""),"""",C2/F2)",Isi salah satu `usdt_idr_input` atau `price_usd_oz_input`
+,,,,,,"=IF(OR(B3="""",D3=""""),"""",B3+D3)","=IF(G3="""","""",D3/G3)","=IF(OR(A3="""",G3=""""),"""",A3/G3)","=IF(OR(C3="""",E3=""""),"""",C3/E3)","=IF(OR(C3="""",F3=""""),"""",C3/F3)",
