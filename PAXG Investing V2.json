@@ -1,0 +1,362 @@
+{
+  "name": "PAXG Investing V2",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -848,
+        48
+      ],
+      "id": "fe17befd-8feb-468d-ba8b-a09a64519afd",
+      "name": "Schedule Trigger 5 Menit"
+    },
+    {
+      "parameters": {
+        "url": "https://www.tokocrypto.site/api/v3/ticker/price?symbol=PAXGUSDT",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -688,
+        48
+      ],
+      "id": "fbdbf188-ef1c-46fc-9e45-4e80725de59b",
+      "name": "Ambil Harga PAXG"
+    },
+    {
+      "parameters": {
+        "url": "https://www.tokocrypto.site/api/v3/ticker/price?symbol=USDTIDR",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -528,
+        48
+      ],
+      "id": "4b9ceb47-3cb3-40b3-b37f-61a86f64ac18",
+      "name": "Ambil Kurs USDT/IDR"
+    },
+    {
+      "parameters": {
+        "url": "=https://docs.google.com/spreadsheets/d/1gFwTYQTcKeILoB0lPs7FZpgObG_ukoCrTjQvqyhmjuQ/gviz/tq?tqx=out:json&sheet=SETTINGS",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -368,
+        48
+      ],
+      "id": "4ce09a5e-a5d0-4d63-9e09-603edf72f42e",
+      "name": "Baca Sheet SETTINGS"
+    },
+    {
+      "parameters": {
+        "url": "=https://docs.google.com/spreadsheets/d/1gFwTYQTcKeILoB0lPs7FZpgObG_ukoCrTjQvqyhmjuQ/gviz/tq?tqx=out:json&sheet=TRADE_LOG",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -48,
+        48
+      ],
+      "id": "121bdcba-ba2a-4d55-9035-b741f8da0294",
+      "name": "Baca Sheet TRADE_LOG"
+    },
+    {
+      "parameters": {
+        "jsCode": "const DEFAULT_CONFIG = {\n  anchorDay: 25,\n  pctAnchor: 45,\n  pctDip: 35,\n  pctDeepDip: 25,\n  dipThresholdPct: 3.0,\n  deepDipThresholdPct: 5.0,\n  tpAnchorPct: 2.0,\n  tpDipPct: 3.0,\n  tpDeepDipPct: 5.0,\n  tp1SellFraction: 0.5,\n  feePct: 0.003,\n  cooldownMinutes: 60,\n  troyOzToGram: 31.1034768,\n  monthlyBudgetIdr: 4000000,\n  swingAmmoIdr: 10000000,\n  timezone: \"Asia/Makassar\",\n};\n\nconst BUY_ACTIONS = new Set([\"BUY_ANCHOR\", \"BUY_DIP\", \"BUY_DEEP\"]);\nconst SELL_ACTIONS = new Set([\"SELL_TP1\", \"SELL_TP2\", \"SELL_MANUAL\"]);\n\nfunction runMainLogic(input) {\n  const {\n    market = {},\n    settingsRawText,\n    tradeLogRawText,\n    settingsData,\n    tradeLogRows,\n    staticData = {},\n    now = new Date(),\n    config: configOverride = {},\n  } = input || {};\n\n  const ctx = buildTradingContext({\n    market,\n    settingsRawText,\n    tradeLogRawText,\n    settingsData,\n    tradeLogRows,\n    staticData,\n    now,\n    configOverride,\n  });\n\n  const signals = evaluateSignals(ctx);\n  const drafts = buildDrafts(ctx);\n  const events = [...signals, ...drafts];\n\n  if (events.length === 0) {\n    return [\n      {\n        json: {\n          should_alert: false,\n          cycle_id: ctx.cycle.id,\n          market: buildMarketPayload(ctx),\n          portfolio: buildPortfolioPayload(ctx),\n          dashboard_metrics: buildDashboardMetrics(ctx),\n        },\n      },\n    ];\n  }\n\n  return events.map((event) => ({\n    json: {\n      should_alert: true,\n      alert_type: event.type,\n      alert_message: event.message,\n      severity: event.severity,\n      cycle_id: ctx.cycle.id,\n      event_key: event.key,\n      action_code: event.actionCode || null,\n      requires_execution: Boolean(event.executionPlan),\n      execution_plan: event.executionPlan || null,\n      draft_payload: event.draftPayload || null,\n      market: buildMarketPayload(ctx),\n      portfolio: buildPortfolioPayload(ctx),\n      pnl: buildPnlPayload(ctx),\n      dashboard_metrics: buildDashboardMetrics(ctx),\n    },\n  }));\n}\n\nfunction buildTradingContext({\n  market,\n  settingsRawText,\n  tradeLogRawText,\n  settingsData,\n  tradeLogRows,\n  staticData,\n  now,\n  configOverride,\n}) {\n  const settings = settingsData || parseSettingsSheet(settingsRawText);\n  const config = mergeConfig(DEFAULT_CONFIG, settings, configOverride);\n  const nowWita = toTimezoneDate(now, config.timezone);\n  const cycleDate = getCycleDate(nowWita, config.anchorDay);\n  const cycleId = formatCycleId(cycleDate);\n  const trades = parseTradeLogSheet(tradeLogRows || tradeLogRawText, config);\n  const portfolio = summarizePortfolio(trades, config);\n  const cycle = summarizeCycle({\n    trades,\n    cycleId,\n    config,\n    nowWita,\n    currentPaxgUsd: toNumberOrNull(market.paxgUsd),\n    currentUsdtIdr: toNumberOrNull(market.usdtIdr),\n  });\n\n  const currentPaxgUsd = toRequiredNumber(\n    market.paxgUsd,\n    \"Harga PAXG tidak valid\"\n  );\n  const currentUsdtIdr = toRequiredNumber(\n    market.usdtIdr,\n    \"Kurs USDT/IDR tidak valid\"\n  );\n  const currentIdrPerPaxg = currentPaxgUsd * currentUsdtIdr;\n  const currentIdrPerGram = currentIdrPerPaxg / config.troyOzToGram;\n  const currentMarketValueIdr = portfolio.openQtyPaxg * currentIdrPerPaxg;\n  const unrealizedPnlIdr = currentMarketValueIdr - portfolio.openCostIdr;\n  const gainPct = portfolio.avgEntryUsd\n    ? ((currentPaxgUsd - portfolio.avgEntryUsd) / portfolio.avgEntryUsd) * 100\n    : null;\n  const dropPct = cycle.anchorPriceUsd\n    ? ((cycle.anchorPriceUsd - currentPaxgUsd) / cycle.anchorPriceUsd) * 100\n    : null;\n\n  return {\n    config,\n    settings,\n    staticData,\n    now,\n    nowWita,\n    nowMs: now.getTime(),\n    cycle,\n    market: {\n      currentPaxgUsd,\n      currentUsdtIdr,\n      currentIdrPerPaxg,\n      currentIdrPerGram,\n    },\n    portfolio: {\n      ...portfolio,\n      currentMarketValueIdr,\n      unrealizedPnlIdr,\n      gainPct,\n    },\n    metrics: {\n      dropPct,\n      gainPct,\n    },\n    labels: {\n      time: nowWita.toLocaleString(\"id-ID\", { timeZone: config.timezone }),\n      dateLong: nowWita.toLocaleDateString(\"id-ID\", {\n        weekday: \"long\",\n        day: \"numeric\",\n        month: \"long\",\n        year: \"numeric\",\n      }),\n      cycleDate: cycleDate.toLocaleDateString(\"id-ID\", {\n        day: \"numeric\",\n        month: \"long\",\n        year: \"numeric\",\n      }),\n      cycleMonth: cycleDate.toLocaleDateString(\"id-ID\", {\n        month: \"long\",\n        year: \"numeric\",\n      }),\n    },\n  };\n}\n\nfunction evaluateSignals(ctx) {\n  const signals = [];\n  maybePushAnchorReminder(signals, ctx);\n  maybePushDipSignal(signals, ctx);\n  maybePushDeepDipSignal(signals, ctx);\n  maybePushPositionTpSignals(signals, ctx);\n  return signals;\n}\n\nfunction buildDrafts(ctx) {\n  const drafts = [];\n  maybePushBuyDraft(drafts, ctx, \"BUY_DIP\");\n  maybePushBuyDraft(drafts, ctx, \"BUY_DEEP\");\n  maybePushSellDraft(drafts, ctx, \"SELL_TP1\");\n  maybePushSellDraft(drafts, ctx, \"SELL_TP2\");\n  return drafts;\n}\n\nfunction maybePushAnchorReminder(signals, ctx) {\n  const { cycle, nowWita, staticData, nowMs, config } = ctx;\n  if (nowWita.getDate() !== config.anchorDay) return;\n  if (cycle.hasAnchorBuy) return;\n  if (!isCooldownPassed(staticData.lastAnchorReminderAt, nowMs, 60 * 60 * 1000)) return;\n\n  staticData.lastAnchorReminderAt = nowMs;\n  signals.push({\n    key: `anchor_reminder_${cycle.id}`,\n    type: \"ANCHOR_REMINDER\",\n    severity: \"info\",\n    actionCode: \"BUY_ANCHOR\",\n    executionPlan: buildExecutionPlan(ctx, \"BUY_ANCHOR\"),\n    message:\n      `📌 *REMINDER ANCHOR BUY*\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `${buildHeaderPrice(ctx)}` +\n      `📅 Siklus : ${cycle.id}\\n` +\n      `📆 Anchor : ${ctx.labels.cycleDate}\\n` +\n      `⚠️ Belum ada transaksi BUY_ANCHOR di ledger.\\n` +\n      `💰 Budget anchor: ${formatIdr(cycle.budgetAnchorIdr)}\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `Setelah beli, append 1 row ke TRADE_LOG dengan action BUY_ANCHOR.`,\n  });\n}\n\nfunction maybePushDipSignal(signals, ctx) {\n  const { cycle, metrics, staticData, nowMs, config } = ctx;\n  if (!cycle.hasAnchorBuy) return;\n  if (cycle.hasDipBuy || cycle.hasDeepBuy) return;\n  if (metrics.dropPct === null) return;\n  if (metrics.dropPct < config.dipThresholdPct || metrics.dropPct >= config.deepDipThresholdPct) return;\n\n  const key = `signal_dip_${cycle.id}`;\n  if (!isCooldownPassed(staticData[key], nowMs, config.cooldownMinutes * 60 * 1000)) return;\n\n  staticData[key] = nowMs;\n  signals.push({\n    key,\n    type: \"DIP_BUY_ALERT\",\n    severity: \"warning\",\n    actionCode: \"BUY_DIP\",\n    executionPlan: buildExecutionPlan(ctx, \"BUY_DIP\"),\n    message:\n      `⚠️ *DIP BUY ALERT*\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `${buildHeaderPrice(ctx)}` +\n      `📅 Siklus : ${cycle.id}\\n` +\n      `🎯 Anchor : $${fmt(cycle.anchorPriceUsd)} / oz\\n` +\n      `📉 Koreksi: ${fmt(metrics.dropPct)}%\\n` +\n      `💰 Budget dip: ${formatIdr(cycle.budgetDipIdr)}\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `Belum ada BUY_DIP di cycle ini. Jika dieksekusi, append row BUY_DIP ke TRADE_LOG.`,\n  });\n}\n\nfunction maybePushDeepDipSignal(signals, ctx) {\n  const { cycle, metrics, staticData, nowMs, config } = ctx;\n  if (!cycle.hasAnchorBuy) return;\n  if (cycle.hasDeepBuy) return;\n  if (metrics.dropPct === null || metrics.dropPct < config.deepDipThresholdPct) return;\n\n  const key = `signal_deep_${cycle.id}`;\n  if (!isCooldownPassed(staticData[key], nowMs, config.cooldownMinutes * 60 * 1000)) return;\n\n  staticData[key] = nowMs;\n  signals.push({\n    key,\n    type: \"DEEP_DIP_ALERT\",\n    severity: \"critical\",\n    actionCode: \"BUY_DEEP\",\n    executionPlan: buildExecutionPlan(ctx, \"BUY_DEEP\"),\n    message:\n      `🚨 *DEEP DIP ALERT*\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `${buildHeaderPrice(ctx)}` +\n      `📅 Siklus : ${cycle.id}\\n` +\n      `🎯 Anchor : $${fmt(cycle.anchorPriceUsd)} / oz\\n` +\n      `📉 Koreksi: ${fmt(metrics.dropPct)}%\\n` +\n      `💰 Budget deep dip: ${formatIdr(cycle.budgetDeepDipIdr)}\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `Belum ada BUY_DEEP di cycle ini. Jika dieksekusi, append row BUY_DEEP ke TRADE_LOG.`,\n  });\n}\n\nfunction maybePushPositionTpSignals(signals, ctx) {\n  const { openLots = [] } = ctx.portfolio;\n  const { staticData, nowMs, market } = ctx;\n\n  for (const lot of openLots) {\n    if (!lot.remainingQtyPaxg || lot.remainingQtyPaxg <= 0) continue;\n\n    const tpConfig = getTpConfigForLot(ctx.config, lot.action);\n    if (!tpConfig) continue;\n\n    const gainPct = ((market.currentPaxgUsd - lot.priceUsdOz) / lot.priceUsdOz) * 100;\n    if (gainPct < tpConfig.targetPct) continue;\n\n    const key = `signal_${tpConfig.signalKey}_${lot.id}`;\n    if (!isCooldownPassed(staticData[key], nowMs, ctx.config.cooldownMinutes * 60 * 1000)) continue;\n\n    staticData[key] = nowMs;\n    signals.push({\n      key,\n      type: tpConfig.alertType,\n      severity: \"success\",\n      actionCode: \"SELL_MANUAL\",\n      executionPlan: buildExecutionPlan(ctx, \"SELL_MANUAL\", { lot, tpConfig }),\n      message:\n        `${tpConfig.emoji} *${tpConfig.title}*\\n` +\n        `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n        `${buildHeaderPrice(ctx)}` +\n        `📦 Posisi   : ${tpConfig.positionLabel}\\n` +\n        `📈 Entry    : $${fmt(lot.priceUsdOz)} / oz\\n` +\n        `📈 Target   : +${fmt(tpConfig.targetPct, 0)}%\\n` +\n        `📈 Gain now : +${fmt(gainPct)}%\\n` +\n        `🪙 Qty open : ${fmt(lot.remainingQtyPaxg, 6)} PAXG\\n` +\n        `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n        `Jika dieksekusi, catat sell posisi ini ke TRADE_LOG.`,\n    });\n  }\n}\n\nfunction maybePushBuyDraft(drafts, ctx, actionCode) {\n  const trade = findLatestTrade(ctx.cycle.trades, actionCode);\n  if (!trade) return;\n\n  const key = `draft_${actionCode}_${trade.id}`;\n  if (ctx.staticData[key]) return;\n  ctx.staticData[key] = true;\n\n  const title = actionCode === \"BUY_DIP\" ? \"Dip Buy\" : \"Deep Dip Buy\";\n  const dropPct = ctx.cycle.anchorPriceUsd\n    ? ((ctx.cycle.anchorPriceUsd - trade.priceUsdOz) / ctx.cycle.anchorPriceUsd) * 100\n    : null;\n\n  drafts.push({\n    key,\n    type: `DRAFT_${actionCode}`,\n    severity: \"info\",\n    draftPayload: {\n      source_action: actionCode,\n      trade_id: trade.id,\n      cycle_id: trade.cycleId,\n    },\n    message:\n      `📝 *DRAFT THREAD - ${title.toUpperCase()}*\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `📅 ${ctx.labels.dateLong}\\n\\n` +\n      `Hari ini saya mengeksekusi *${title}* pada PAXG.\\n\\n` +\n      `• Harga beli: $${fmt(trade.priceUsdOz)} / oz\\n` +\n      `• Nilai beli: ${formatIdr(trade.grossIdr)}\\n` +\n      `• Qty      : ${fmt(trade.qtyPaxg, 6)} PAXG\\n` +\n      `${dropPct === null ? \"\" : `• Koreksi  : -${fmt(dropPct)}% dari anchor\\n`}` +\n      `• Gram     : ~${fmt(trade.qtyGram, 4)} gram\\n\\n` +\n      `#PAXG #Emas #DCA`,\n  });\n}\n\nfunction maybePushSellDraft(drafts, ctx, actionCode) {\n  const trade = findLatestTrade(ctx.cycle.trades, actionCode);\n  if (!trade) return;\n\n  const key = `draft_${actionCode}_${trade.id}`;\n  if (ctx.staticData[key]) return;\n  ctx.staticData[key] = true;\n\n  const title = actionCode === \"SELL_TP1\" ? \"Take Profit 1\" : \"Take Profit 2\";\n  const realizedPct = trade.avgEntryUsdAtExecution\n    ? ((trade.priceUsdOz - trade.avgEntryUsdAtExecution) / trade.avgEntryUsdAtExecution) * 100\n    : null;\n\n  drafts.push({\n    key,\n    type: `DRAFT_${actionCode}`,\n    severity: \"info\",\n    draftPayload: {\n      source_action: actionCode,\n      trade_id: trade.id,\n      cycle_id: trade.cycleId,\n    },\n    message:\n      `📝 *DRAFT THREAD - ${title.toUpperCase()}*\\n` +\n      `━━━━━━━━━━━━━━━━━━━━━━━━\\n` +\n      `📅 ${ctx.labels.dateLong}\\n\\n` +\n      `Hari ini saya mengeksekusi *${title}* pada posisi PAXG saya.\\n\\n` +\n      `• Harga jual : $${fmt(trade.priceUsdOz)} / oz\\n` +\n      `• Nilai jual : ${formatIdr(trade.grossIdr)}\\n` +\n      `• Qty jual   : ${fmt(trade.qtyPaxg, 6)} PAXG\\n` +\n      `${realizedPct === null ? \"\" : `• Gain      : +${fmt(realizedPct)}%\\n`}` +\n      `• Realized PnL: ${formatIdr(trade.realizedPnlIdr || 0)}\\n\\n` +\n      `#PAXG #Emas #TakeProfit`,\n  });\n}\n\nfunction buildExecutionPlan(ctx, actionCode, options = {}) {\n  const amountIdr = getSuggestedGrossIdr(ctx, actionCode, options);\n  const qtyPaxg = getSuggestedQtyPaxg(ctx, actionCode, options);\n  const qtyFraction = getSuggestedSellFraction(ctx, actionCode, options);\n  const note = options.tpConfig && options.lot\n    ? `${options.tpConfig.positionLabel} TP +${fmt(options.tpConfig.targetPct, 0)}%`\n    : \"\";\n\n  return {\n    action: actionCode,\n    cycle_id: ctx.cycle.id,\n    suggested_gross_idr: amountIdr,\n    suggested_qty_paxg: qtyPaxg,\n    suggested_qty_gram: qtyPaxg === null ? null : qtyPaxg * ctx.config.troyOzToGram,\n    suggested_sell_fraction: qtyFraction,\n    log_row_preview: buildTradeLogRow({\n      action: actionCode,\n      cycleId: ctx.cycle.id,\n      priceUsdOz: ctx.market.currentPaxgUsd,\n      usdtIdr: ctx.market.currentUsdtIdr,\n      grossIdr: amountIdr,\n      feePct: ctx.config.feePct,\n      now: ctx.nowWita,\n      portfolio: ctx.portfolio,\n      config: ctx.config,\n      note,\n    }),\n  };\n}\n\nfunction buildTradeLogRow(input) {\n  const {\n    action,\n    cycleId,\n    priceUsdOz,\n    usdtIdr,\n    grossIdr,\n    feePct = DEFAULT_CONFIG.feePct,\n    now = new Date(),\n    portfolio = {},\n    config = DEFAULT_CONFIG,\n    note = \"\",\n  } = input;\n\n  const qtyPaxg = estimateQtyPaxg(grossIdr, priceUsdOz, usdtIdr);\n  const qtyGram = qtyPaxg === null ? null : qtyPaxg * config.troyOzToGram;\n  const avgEntryUsdAtExecution = toNumberOrNull(portfolio.avgEntryUsd);\n  const realizedCostIdr = SELL_ACTIONS.has(action) && qtyPaxg !== null && portfolio.avgEntryIdrPerPaxg\n    ? qtyPaxg * portfolio.avgEntryIdrPerPaxg\n    : 0;\n  const feeIdr = grossIdr ? grossIdr * feePct : 0;\n  const netIdr = BUY_ACTIONS.has(action) ? grossIdr + feeIdr : grossIdr - feeIdr;\n  const realizedPnlIdr = SELL_ACTIONS.has(action) ? grossIdr - feeIdr - realizedCostIdr : 0;\n\n  return {\n    date_time: formatDateTime(now),\n    cycle_id: cycleId,\n    action,\n    price_usd_oz: roundNumber(priceUsdOz, 2),\n    usdt_idr: roundNumber(usdtIdr, 2),\n    gross_idr: roundNumber(grossIdr, 0),\n    fee_pct: roundNumber(feePct, 6),\n    qty_paxg: roundNumber(qtyPaxg, 8),\n    qty_gram: roundNumber(qtyGram, 6),\n    fee_idr: roundNumber(feeIdr, 0),\n    net_idr: roundNumber(netIdr, 0),\n    avg_entry_usd_at_execution: roundNumber(avgEntryUsdAtExecution, 2),\n    realized_cost_idr: roundNumber(realizedCostIdr, 0),\n    realized_pnl_idr: roundNumber(realizedPnlIdr, 0),\n    note,\n  };\n}\n\nfunction parseSettingsSheet(rawText) {\n  const rows = Array.isArray(rawText) ? rawText : parseSheetRows(rawText);\n  const result = {};\n\n  for (const row of rows) {\n    const key = row.key;\n    const value = row.value;\n    if (!key) continue;\n    result[String(key).trim()] = value;\n  }\n\n  return result;\n}\n\nfunction parseTradeLogSheet(rawText, config) {\n  const rows = Array.isArray(rawText) ? rawText : parseSheetRows(rawText);\n  if (!rows.length) return [];\n  const trades = [];\n  let runningQty = 0;\n  let runningCost = 0;\n\n  for (let i = 0; i < rows.length; i += 1) {\n    const row = rows[i];\n    const action = getStringValue(row.action);\n    if (!action) continue;\n\n    const grossIdr = toRequiredNumber(row.gross_idr, `gross_idr kosong di row ${i + 2}`);\n    const priceUsdOz = toRequiredNumber(row.price_usd_oz, `price_usd_oz kosong di row ${i + 2}`);\n    const usdtIdr = toRequiredNumber(row.usdt_idr, `usdt_idr kosong di row ${i + 2}`);\n    const feePct = toNumberOrDefault(row.fee_pct, config.feePct);\n    const qtyPaxg = toNumberOrDefault(\n      row.qty_paxg,\n      estimateQtyPaxg(grossIdr, priceUsdOz, usdtIdr)\n    );\n    const qtyGram = qtyPaxg * config.troyOzToGram;\n    const feeIdr = grossIdr * feePct;\n    const netIdr = BUY_ACTIONS.has(action) ? grossIdr + feeIdr : grossIdr - feeIdr;\n    const avgEntryIdrPerPaxgBefore = runningQty > 0 ? runningCost / runningQty : 0;\n    const avgEntryUsdAtExecution = avgEntryIdrPerPaxgBefore > 0\n      ? avgEntryIdrPerPaxgBefore / usdtIdr\n      : null;\n\n    let realizedCostIdr = 0;\n    let realizedPnlIdr = 0;\n    if (SELL_ACTIONS.has(action)) {\n      realizedCostIdr = qtyPaxg * avgEntryIdrPerPaxgBefore;\n      realizedPnlIdr = grossIdr - feeIdr - realizedCostIdr;\n      runningQty -= qtyPaxg;\n      runningCost -= realizedCostIdr;\n    } else if (BUY_ACTIONS.has(action)) {\n      runningQty += qtyPaxg;\n      runningCost += grossIdr + feeIdr;\n    }\n\n    if (runningQty < 0.00000001) runningQty = 0;\n    if (runningCost < 0.5) runningCost = 0;\n\n    trades.push({\n      id: i + 2,\n      dateTime: parseTradeDateTime(row.date_time),\n      cycleId: getStringValue(row.cycle_id),\n      action,\n      priceUsdOz,\n      usdtIdr,\n      grossIdr,\n      feePct,\n      qtyPaxg,\n      qtyGram,\n      feeIdr,\n      netIdr,\n      avgEntryUsdAtExecution,\n      realizedCostIdr,\n      realizedPnlIdr,\n      note: getStringValue(row.note),\n      runningOpenQty: runningQty,\n      runningOpenCostIdr: runningCost,\n    });\n  }\n\n  return trades;\n}\n\nfunction parseSheetRows(rawText) {\n  if (!rawText) return [];\n  const table = parseGvizText(rawText).table || {};\n  const cols = table.cols || [];\n  const rows = table.rows || [];\n  if (!rows.length) return [];\n\n  const headerRow = rows[0];\n  const colHeaders = cols.map((col) => toSnakeCase(col?.label));\n  const hasColHeaders = colHeaders.some((header) => header);\n  const rowHeaders = [];\n\n  for (let i = 0; i < (headerRow?.c || []).length; i += 1) {\n    rowHeaders.push(toSnakeCase(getCellValue(headerRow, i)));\n  }\n\n  const headers = hasColHeaders ? colHeaders : rowHeaders;\n  const dataRows = hasColHeaders ? rows : rows.slice(1);\n\n  const output = [];\n  for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx += 1) {\n    const row = dataRows[rowIdx];\n    const item = {};\n\n    for (let colIdx = 0; colIdx < headers.length; colIdx += 1) {\n      const header = headers[colIdx];\n      if (!header) continue;\n      item[header] = getCellValue(row, colIdx);\n    }\n\n    if (Object.values(item).some((value) => value !== null && value !== \"\")) {\n      output.push(item);\n    }\n  }\n\n  return output;\n}\n\nfunction summarizePortfolio(trades, config) {\n  const lastTrade = trades[trades.length - 1] || null;\n  const openQtyPaxg = lastTrade ? lastTrade.runningOpenQty : 0;\n  const openCostIdr = lastTrade ? lastTrade.runningOpenCostIdr : 0;\n  const avgEntryIdrPerPaxg = openQtyPaxg > 0 ? openCostIdr / openQtyPaxg : null;\n  const latestUsdtIdr = lastTrade ? lastTrade.usdtIdr : null;\n  const avgEntryUsd = avgEntryIdrPerPaxg && latestUsdtIdr\n    ? avgEntryIdrPerPaxg / latestUsdtIdr\n    : null;\n  const openLots = buildOpenLots(trades, config);\n\n  return {\n    totalTrades: trades.length,\n    openQtyPaxg,\n    openQtyGram: openQtyPaxg * config.troyOzToGram,\n    openCostIdr,\n    avgEntryIdrPerPaxg,\n    avgEntryUsd,\n    openLots,\n    realizedPnlIdr: sumBy(trades, \"realizedPnlIdr\"),\n    totalBuyIdr: sumWhere(trades, (trade) => BUY_ACTIONS.has(trade.action), \"grossIdr\"),\n    totalSellIdr: sumWhere(trades, (trade) => SELL_ACTIONS.has(trade.action), \"grossIdr\"),\n  };\n}\n\nfunction buildOpenLots(trades, config) {\n  const lots = [];\n\n  for (const trade of trades) {\n    if (BUY_ACTIONS.has(trade.action)) {\n      lots.push({\n        id: `${trade.action}_${trade.id}`,\n        tradeId: trade.id,\n        action: trade.action,\n        cycleId: trade.cycleId,\n        priceUsdOz: trade.priceUsdOz,\n        usdtIdr: trade.usdtIdr,\n        qtyPaxg: trade.qtyPaxg,\n        qtyGram: trade.qtyGram,\n        remainingQtyPaxg: trade.qtyPaxg,\n        remainingQtyGram: trade.qtyGram,\n        netIdr: trade.netIdr,\n        dateTime: trade.dateTime,\n      });\n      continue;\n    }\n\n    if (!SELL_ACTIONS.has(trade.action)) continue;\n\n    let remainingSellQty = trade.qtyPaxg;\n    for (const lot of lots) {\n      if (remainingSellQty <= 0) break;\n      if (lot.remainingQtyPaxg <= 0) continue;\n\n      const reducedQty = Math.min(lot.remainingQtyPaxg, remainingSellQty);\n      lot.remainingQtyPaxg -= reducedQty;\n      lot.remainingQtyGram = lot.remainingQtyPaxg * config.troyOzToGram;\n      remainingSellQty -= reducedQty;\n    }\n  }\n\n  return lots.filter((lot) => lot.remainingQtyPaxg > 0.00000001);\n}\n\nfunction summarizeCycle({ trades, cycleId, config, nowWita, currentPaxgUsd, currentUsdtIdr }) {\n  const cycleTrades = trades.filter((trade) => trade.cycleId === cycleId);\n  const anchorTrade = cycleTrades.find((trade) => trade.action === \"BUY_ANCHOR\") || null;\n  const dipTrade = cycleTrades.find((trade) => trade.action === \"BUY_DIP\") || null;\n  const deepTrade = cycleTrades.find((trade) => trade.action === \"BUY_DEEP\") || null;\n  const tp1Trade = cycleTrades.find((trade) => trade.action === \"SELL_TP1\") || null;\n  const tp2Trade = cycleTrades.find((trade) => trade.action === \"SELL_TP2\") || null;\n  const anchorPriceUsd = anchorTrade\n    ? anchorTrade.priceUsdOz\n    : findLatestTradeBeforeCycle(trades, cycleId, \"BUY_ANCHOR\")?.priceUsdOz || null;\n\n  return {\n    id: cycleId,\n    trades: cycleTrades,\n    anchorDate: getCycleDate(nowWita, config.anchorDay),\n    hasAnchorBuy: Boolean(anchorTrade),\n    hasDipBuy: Boolean(dipTrade),\n    hasDeepBuy: Boolean(deepTrade),\n    hasTp1Sell: Boolean(tp1Trade),\n    hasTp2Sell: Boolean(tp2Trade),\n    anchorPriceUsd,\n    currentPaxgUsd,\n    currentUsdtIdr,\n    budgetTotalIdr: config.monthlyBudgetIdr,\n    budgetAnchorIdr: config.monthlyBudgetIdr * (config.pctAnchor / 100),\n    budgetDipIdr: config.monthlyBudgetIdr * (config.pctDip / 100),\n    budgetDeepDipIdr: config.monthlyBudgetIdr * (config.pctDeepDip / 100),\n    swingAmmoIdr: config.swingAmmoIdr,\n  };\n}\n\nfunction buildPortfolioPayload(ctx) {\n  return {\n    open_qty_paxg: roundNumber(ctx.portfolio.openQtyPaxg, 8),\n    open_qty_gram: roundNumber(ctx.portfolio.openQtyGram, 4),\n    open_cost_idr: roundNumber(ctx.portfolio.openCostIdr, 0),\n    avg_entry_usd: roundNumber(ctx.portfolio.avgEntryUsd, 2),\n    avg_entry_idr_per_paxg: roundNumber(ctx.portfolio.avgEntryIdrPerPaxg, 0),\n    market_value_idr: roundNumber(ctx.portfolio.currentMarketValueIdr, 0),\n  };\n}\n\nfunction buildMarketPayload(ctx) {\n  return {\n    current_paxg_usd: roundNumber(ctx.market.currentPaxgUsd, 2),\n    current_usdt_idr: roundNumber(ctx.market.currentUsdtIdr, 2),\n    current_idr_per_gram: roundNumber(ctx.market.currentIdrPerGram, 0),\n  };\n}\n\nfunction buildPnlPayload(ctx) {\n  const positionTargets = buildPositionTargetPayload(ctx);\n\n  return {\n    gain_pct: roundNumber(ctx.metrics.gainPct, 2),\n    drop_pct: roundNumber(ctx.metrics.dropPct, 2),\n    realized_pnl_idr: roundNumber(ctx.portfolio.realizedPnlIdr, 0),\n    unrealized_pnl_idr: roundNumber(ctx.portfolio.unrealizedPnlIdr, 0),\n    anchor_tp_target_usd: positionTargets.anchor_tp_target_usd,\n    dip_tp_target_usd: positionTargets.dip_tp_target_usd,\n    deep_dip_tp_target_usd: positionTargets.deep_dip_tp_target_usd,\n  };\n}\n\nfunction buildDashboardMetrics(ctx) {\n  const pnl = buildPnlPayload(ctx);\n  const market = buildMarketPayload(ctx);\n  const portfolio = buildPortfolioPayload(ctx);\n\n  return [\n    { metric: \"current_paxg_usd\", value: market.current_paxg_usd, note: \"Updated otomatis oleh n8n\" },\n    { metric: \"current_usdt_idr\", value: market.current_usdt_idr, note: \"Updated otomatis oleh n8n\" },\n    { metric: \"total_open_qty_paxg\", value: portfolio.open_qty_paxg, note: \"Updated otomatis oleh n8n\" },\n    { metric: \"total_open_gram\", value: portfolio.open_qty_gram, note: \"Updated otomatis oleh n8n\" },\n    { metric: \"open_cost_idr\", value: portfolio.open_cost_idr, note: \"Updated otomatis oleh n8n\" },\n    { metric: \"avg_entry_idr_per_paxg\", value: portfolio.avg_entry_idr_per_paxg, note: \"Updated otomatis oleh n8n\" },\n    { metric: \"avg_entry_usd_per_oz\", value: portfolio.avg_entry_usd, note: \"Updated otomatis oleh n8n\" },\n    { metric: \"market_value_idr\", value: portfolio.market_value_idr, note: \"Updated otomatis oleh n8n\" },\n    { metric: \"unrealized_pnl_idr\", value: pnl.unrealized_pnl_idr, note: \"Updated otomatis oleh n8n\" },\n    { metric: \"realized_pnl_idr\", value: pnl.realized_pnl_idr, note: \"Updated otomatis oleh n8n\" },\n    { metric: \"anchor_tp_target_usd\", value: pnl.anchor_tp_target_usd, note: \"TP posisi anchor +2%\" },\n    { metric: \"dip_tp_target_usd\", value: pnl.dip_tp_target_usd, note: \"TP posisi dip +3%\" },\n    { metric: \"deep_dip_tp_target_usd\", value: pnl.deep_dip_tp_target_usd, note: \"TP posisi deep dip +5%\" },\n    { metric: \"monthly_budget_idr\", value: ctx.config.monthlyBudgetIdr, note: \"Config dari SETTINGS\" },\n    { metric: \"swing_ammo_idr\", value: ctx.config.swingAmmoIdr, note: \"Config dari SETTINGS\" },\n  ];\n}\n\nfunction mergeConfig(defaults, settings, override) {\n  return {\n    ...defaults,\n    anchorDay: toNumberOrDefault(override.anchorDay ?? settings.anchor_day, defaults.anchorDay),\n    pctAnchor: toNumberOrDefault(override.pctAnchor ?? settings.pct_anchor, defaults.pctAnchor),\n    pctDip: toNumberOrDefault(override.pctDip ?? settings.pct_dip, defaults.pctDip),\n    pctDeepDip: toNumberOrDefault(override.pctDeepDip ?? settings.pct_deep_dip, defaults.pctDeepDip),\n    dipThresholdPct: toNumberOrDefault(\n      override.dipThresholdPct ?? settings.dip_threshold_pct,\n      defaults.dipThresholdPct\n    ),\n    deepDipThresholdPct: toNumberOrDefault(\n      override.deepDipThresholdPct ?? settings.deep_dip_threshold_pct,\n      defaults.deepDipThresholdPct\n    ),\n    tpAnchorPct: toNumberOrDefault(\n      override.tpAnchorPct ?? settings.tp_anchor_pct ?? settings.tp1_pct,\n      defaults.tpAnchorPct\n    ),\n    tpDipPct: toNumberOrDefault(\n      override.tpDipPct ?? settings.tp_dip_pct,\n      defaults.tpDipPct\n    ),\n    tpDeepDipPct: toNumberOrDefault(\n      override.tpDeepDipPct ?? settings.tp_deep_dip_pct ?? settings.tp2_pct,\n      defaults.tpDeepDipPct\n    ),\n    feePct: toNumberOrDefault(override.feePct ?? settings.fee_pct, defaults.feePct),\n    cooldownMinutes: toNumberOrDefault(\n      override.cooldownMinutes ?? settings.cooldown_minutes,\n      defaults.cooldownMinutes\n    ),\n    troyOzToGram: toNumberOrDefault(\n      override.troyOzToGram ?? settings.troy_oz_to_gram,\n      defaults.troyOzToGram\n    ),\n    monthlyBudgetIdr: toNumberOrDefault(\n      override.monthlyBudgetIdr ?? settings.monthly_budget_idr,\n      defaults.monthlyBudgetIdr\n    ),\n    swingAmmoIdr: toNumberOrDefault(\n      override.swingAmmoIdr ?? settings.swing_ammo_idr,\n      defaults.swingAmmoIdr\n    ),\n    timezone: override.timezone || settings.timezone || defaults.timezone,\n    tp1SellFraction: toNumberOrDefault(\n      override.tp1SellFraction ?? settings.tp1_sell_fraction,\n      defaults.tp1SellFraction\n    ),\n  };\n}\n\nfunction getSuggestedGrossIdr(ctx, actionCode, options = {}) {\n  switch (actionCode) {\n    case \"BUY_ANCHOR\":\n      return ctx.cycle.budgetAnchorIdr;\n    case \"BUY_DIP\":\n      return ctx.cycle.budgetDipIdr;\n    case \"BUY_DEEP\":\n      return ctx.cycle.budgetDeepDipIdr;\n    case \"SELL_TP1\":\n      return ctx.portfolio.openQtyPaxg * ctx.config.tp1SellFraction * ctx.market.currentIdrPerPaxg;\n    case \"SELL_TP2\":\n      return ctx.portfolio.openQtyPaxg * ctx.market.currentIdrPerPaxg;\n    case \"SELL_MANUAL\":\n      return options.lot\n        ? options.lot.remainingQtyPaxg * ctx.market.currentIdrPerPaxg\n        : null;\n    default:\n      return null;\n  }\n}\n\nfunction getSuggestedQtyPaxg(ctx, actionCode, options = {}) {\n  if (actionCode === \"SELL_MANUAL\" && options.lot) return options.lot.remainingQtyPaxg;\n  const amountIdr = getSuggestedGrossIdr(ctx, actionCode, options);\n  return estimateQtyPaxg(amountIdr, ctx.market.currentPaxgUsd, ctx.market.currentUsdtIdr);\n}\n\nfunction getSuggestedSellFraction(ctx, actionCode, options = {}) {\n  if (actionCode === \"SELL_TP1\") return ctx.config.tp1SellFraction;\n  if (actionCode === \"SELL_TP2\") return 1;\n  if (actionCode === \"SELL_MANUAL\" && options.lot && ctx.portfolio.openQtyPaxg > 0) {\n    return options.lot.remainingQtyPaxg / ctx.portfolio.openQtyPaxg;\n  }\n  return null;\n}\n\nfunction getTpConfigForLot(config, action) {\n  if (action === \"BUY_ANCHOR\") {\n    return {\n      signalKey: \"anchor_tp\",\n      alertType: \"ANCHOR_TP_ALERT\",\n      title: \"TP ANCHOR\",\n      positionLabel: \"Anchor\",\n      targetPct: config.tpAnchorPct,\n      emoji: \"✅\",\n    };\n  }\n\n  if (action === \"BUY_DIP\") {\n    return {\n      signalKey: \"dip_tp\",\n      alertType: \"DIP_TP_ALERT\",\n      title: \"TP DIP\",\n      positionLabel: \"Dip\",\n      targetPct: config.tpDipPct,\n      emoji: \"🎯\",\n    };\n  }\n\n  if (action === \"BUY_DEEP\") {\n    return {\n      signalKey: \"deep_tp\",\n      alertType: \"DEEP_DIP_TP_ALERT\",\n      title: \"TP DEEP DIP\",\n      positionLabel: \"Deep Dip\",\n      targetPct: config.tpDeepDipPct,\n      emoji: \"🚀\",\n    };\n  }\n\n  return null;\n}\n\nfunction buildPositionTargetPayload(ctx) {\n  const targets = {\n    anchor_tp_target_usd: null,\n    dip_tp_target_usd: null,\n    deep_dip_tp_target_usd: null,\n  };\n\n  for (const lot of ctx.portfolio.openLots || []) {\n    const tpConfig = getTpConfigForLot(ctx.config, lot.action);\n    if (!tpConfig) continue;\n\n    const targetPrice = roundNumber(lot.priceUsdOz * (1 + tpConfig.targetPct / 100), 2);\n    if (lot.action === \"BUY_ANCHOR\") targets.anchor_tp_target_usd = targetPrice;\n    if (lot.action === \"BUY_DIP\") targets.dip_tp_target_usd = targetPrice;\n    if (lot.action === \"BUY_DEEP\") targets.deep_dip_tp_target_usd = targetPrice;\n  }\n\n  return targets;\n}\n\nfunction buildHeaderPrice(ctx) {\n  return (\n    `🕐 ${ctx.labels.time} WITA\\n` +\n    `💹 PAXG : $${fmt(ctx.market.currentPaxgUsd)} / troy oz\\n` +\n    `💱 Kurs : ${formatIdr(ctx.market.currentUsdtIdr)} / USDT\\n` +\n    `💵 /gram: ${formatIdr(ctx.market.currentIdrPerGram)}\\n`\n  );\n}\n\nfunction getCycleDate(nowWita, anchorDay) {\n  const year = nowWita.getFullYear();\n  const month = nowWita.getMonth();\n  const date = nowWita.getDate();\n\n  if (date <= anchorDay) {\n    if (month === 0) return new Date(year - 1, 11, anchorDay);\n    return new Date(year, month - 1, anchorDay);\n  }\n\n  return new Date(year, month, anchorDay);\n}\n\nfunction formatCycleId(date) {\n  const year = date.getFullYear();\n  const month = String(date.getMonth() + 1).padStart(2, \"0\");\n  return `${year}-${month}`;\n}\n\nfunction parseGvizText(rawText) {\n  const jsonText = String(rawText || \"\")\n    .replace(/^[^\\(]+\\(/, \"\")\n    .replace(/\\);?\\s*$/, \"\");\n  return JSON.parse(jsonText);\n}\n\nfunction mapColumns(cols) {\n  const map = {};\n  for (let i = 0; i < cols.length; i += 1) {\n    map[toSnakeCase(cols[i])] = i;\n  }\n  return map;\n}\n\nfunction getCellValue(row, colIdx) {\n  if (colIdx === undefined || colIdx < 0) return null;\n  const cell = row?.c?.[colIdx];\n  return cell && cell.v !== null && cell.v !== undefined ? cell.v : null;\n}\n\nfunction getStringCell(row, colIdx) {\n  const value = getCellValue(row, colIdx);\n  return value === null ? \"\" : String(value).trim();\n}\n\nfunction getStringValue(value) {\n  return value === null || value === undefined ? \"\" : String(value).trim();\n}\n\nfunction parseTradeDateTime(value) {\n  if (!value) return null;\n  if (value instanceof Date) return value;\n  if (typeof value === \"string\" && value.startsWith(\"Date(\")) {\n    const parts = value\n      .replace(\"Date(\", \"\")\n      .replace(\")\", \"\")\n      .split(\",\")\n      .map(Number);\n    return new Date(parts[0], parts[1], parts[2], parts[3] || 0, parts[4] || 0, parts[5] || 0);\n  }\n  const parsed = new Date(value);\n  return Number.isNaN(parsed.getTime()) ? null : parsed;\n}\n\nfunction findLatestTrade(trades, actionCode) {\n  for (let i = trades.length - 1; i >= 0; i -= 1) {\n    if (trades[i].action === actionCode) return trades[i];\n  }\n  return null;\n}\n\nfunction findLatestTradeBeforeCycle(trades, cycleId, actionCode) {\n  for (let i = trades.length - 1; i >= 0; i -= 1) {\n    if (trades[i].cycleId < cycleId && trades[i].action === actionCode) return trades[i];\n  }\n  return null;\n}\n\nfunction estimateQtyPaxg(grossIdr, priceUsdOz, usdtIdr) {\n  if (!grossIdr || !priceUsdOz || !usdtIdr) return null;\n  return grossIdr / (priceUsdOz * usdtIdr);\n}\n\nfunction isCooldownPassed(lastTs, nowMs, cooldownMs) {\n  return nowMs - (lastTs || 0) > cooldownMs;\n}\n\nfunction toSnakeCase(value) {\n  return String(value || \"\")\n    .trim()\n    .toLowerCase()\n    .replace(/[^a-z0-9]+/g, \"_\")\n    .replace(/^_+|_+$/g, \"\");\n}\n\nfunction toRequiredNumber(value, message) {\n  const num = Number(value);\n  if (!Number.isFinite(num)) throw new Error(message);\n  return num;\n}\n\nfunction toNumberOrDefault(value, fallback) {\n  const num = Number(value);\n  return Number.isFinite(num) ? num : fallback;\n}\n\nfunction toNumberOrNull(value) {\n  const num = Number(value);\n  return Number.isFinite(num) ? num : null;\n}\n\nfunction toTimezoneDate(date, timeZone) {\n  const parts = new Intl.DateTimeFormat(\"en-CA\", {\n    timeZone,\n    year: \"numeric\",\n    month: \"2-digit\",\n    day: \"2-digit\",\n    hour: \"2-digit\",\n    minute: \"2-digit\",\n    second: \"2-digit\",\n    hour12: false,\n  }).formatToParts(date);\n\n  const lookup = {};\n  for (const part of parts) {\n    lookup[part.type] = part.value;\n  }\n\n  return new Date(\n    Number(lookup.year),\n    Number(lookup.month) - 1,\n    Number(lookup.day),\n    Number(lookup.hour),\n    Number(lookup.minute),\n    Number(lookup.second)\n  );\n}\n\nfunction formatDateTime(date) {\n  const year = date.getFullYear();\n  const month = String(date.getMonth() + 1).padStart(2, \"0\");\n  const day = String(date.getDate()).padStart(2, \"0\");\n  const hours = String(date.getHours()).padStart(2, \"0\");\n  const minutes = String(date.getMinutes()).padStart(2, \"0\");\n  const seconds = String(date.getSeconds()).padStart(2, \"0\");\n  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;\n}\n\nfunction sumBy(items, field) {\n  return items.reduce((sum, item) => sum + (Number(item[field]) || 0), 0);\n}\n\nfunction sumWhere(items, predicate, field) {\n  return items.reduce((sum, item) => sum + (predicate(item) ? Number(item[field]) || 0 : 0), 0);\n}\n\nfunction roundNumber(value, decimals) {\n  if (value === null || value === undefined || Number.isNaN(Number(value))) return null;\n  const factor = 10 ** decimals;\n  return Math.round(Number(value) * factor) / factor;\n}\n\nfunction formatIdr(value) {\n  return new Intl.NumberFormat(\"id-ID\", {\n    style: \"currency\",\n    currency: \"IDR\",\n    minimumFractionDigits: 0,\n    maximumFractionDigits: 0,\n  }).format(Math.round(value || 0));\n}\n\nfunction fmt(value, decimals = 2) {\n  if (value === null || value === undefined || Number.isNaN(Number(value))) return \"-\";\n  return Number(value).toFixed(decimals);\n}\n\n// n8n entrypoint\nconst market = {\n  paxgUsd: $('Ambil Harga PAXG').first()?.json?.price,\n  usdtIdr: $('Ambil Kurs USDT/IDR').first()?.json?.price,\n};\n\nconst settingsData = $('Parse SETTINGS').first()?.json?.settings || {};\nconst tradeLogRows = $('Parse TRADE_LOG').first()?.json?.trade_log_rows || [];\nconst output = runMainLogic({\n  market,\n  settingsData,\n  tradeLogRows,\n  staticData: $getWorkflowStaticData('global'),\n  now: new Date(),\n});\n\nreturn output;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        48
+      ],
+      "id": "5b4d090b-b5f2-4f16-abd5-0d04786c0a9d",
+      "name": "Main Logic — Alert & Draft Thread"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-alert",
+              "leftValue": "={{ $json.should_alert }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        448,
+        48
+      ],
+      "id": "487d4d44-f061-4e2d-a051-85b529187bab",
+      "name": "Perlu Alert?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://discord.com/api/webhooks/1469887342213861507/z0wY6Wd3fXIoUnm91vS6X-sWHSsNaW01NZp5-gl26VPfVxoPV1CpOclaYXvqh9BP_wjA",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ content: $json.alert_message }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        32
+      ],
+      "id": "384d97cc-ce99-4c29-a719-eb2886f06d55",
+      "name": "Kirim Ke Discord"
+    },
+    {
+      "parameters": {
+        "jsCode": "const metrics = $input.first()?.json?.dashboard_metrics || [];\n\nfunction toSheetValue(value) {\n  if (value === null || value === undefined || value === \"\") return \"\";\n  if (typeof value === \"number\" && Number.isFinite(value)) {\n    // Google Sheets dengan locale Indonesia bisa membaca string decimal\n    // bertitik sebagai ribuan. Ubah ke koma agar nilai pecahan tetap benar.\n    if (!Number.isInteger(value)) return String(value).replace(\".\", \",\");\n    return value;\n  }\n  return value;\n}\n\nreturn metrics.map((row) => ({\n  json: {\n    ...row,\n    value: toSheetValue(row.value),\n  },\n}));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        224
+      ],
+      "id": "470fbf88-f642-46ad-a37b-cf33ad2b5caa",
+      "name": "Build Dashboard Rows"
+    },
+    {
+      "parameters": {
+        "resource": "sheetWithinDocument",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "https://docs.google.com/spreadsheets/d/1gFwTYQTcKeILoB0lPs7FZpgObG_ukoCrTjQvqyhmjuQ/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "DASHBOARD"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "matchingColumns": [
+            "metric"
+          ]
+        },
+        "options": {
+          "dataLocationOnSheet": {
+            "headerRow": 1,
+            "firstDataRow": 2
+          },
+          "handlingExtraFields": "ignoreThem"
+        }
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        736,
+        224
+      ],
+      "id": "55f1d6ff-f6a0-4854-aaa9-835dbf91d306",
+      "name": "Update Dashboard Sheet"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawText = $input.first()?.json?.data || '';\n\nfunction parseGvizText(raw) {\n  const jsonText = String(raw || '')\n    .replace(/^[^\\(]+\\(/, '')\n    .replace(/\\);?\\s*$/, '');\n  return JSON.parse(jsonText);\n}\n\nfunction getCellValue(row, colIdx) {\n  if (colIdx === undefined || colIdx < 0) return null;\n  const cell = row?.c?.[colIdx];\n  return cell && cell.v !== null && cell.v !== undefined ? cell.v : null;\n}\n\nfunction toSnakeCase(value) {\n  return String(value || '')\n    .trim()\n    .toLowerCase()\n    .replace(/[^a-z0-9]+/g, '_')\n    .replace(/^_+|_+$/g, '');\n}\n\nfunction parseSheetRows(raw) {\n  if (!raw) return [];\n  const table = parseGvizText(raw).table || {};\n  const cols = table.cols || [];\n  const rows = table.rows || [];\n  if (!rows.length) return [];\n\n  const colHeaders = cols.map((col) => toSnakeCase(col?.label));\n  const hasColHeaders = colHeaders.some((header) => header);\n  const headerRow = rows[0];\n  const rowHeaders = (headerRow?.c || []).map((_, index) => toSnakeCase(getCellValue(headerRow, index)));\n  const headers = hasColHeaders ? colHeaders : rowHeaders;\n  const dataRows = hasColHeaders ? rows : rows.slice(1);\n\n  return dataRows.map((row) => {\n    const item = {};\n    headers.forEach((header, index) => {\n      if (!header) return;\n      item[header] = getCellValue(row, index);\n    });\n    return item;\n  }).filter((item) => Object.values(item).some((value) => value !== null && value !== ''));\n}\n\nconst rows = parseSheetRows(rawText);\nconst settings = {};\nfor (const row of rows) {\n  if (!row.key) continue;\n  settings[String(row.key).trim()] = row.value;\n}\n\nreturn [{ json: { settings, settings_rows: rows } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -208,
+        48
+      ],
+      "id": "63d9b70e-c9cc-46d5-b3df-4a42213a3966",
+      "name": "Parse SETTINGS"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawText = $input.first()?.json?.data || '';\n\nfunction parseGvizText(raw) {\n  const jsonText = String(raw || '')\n    .replace(/^[^\\(]+\\(/, '')\n    .replace(/\\);?\\s*$/, '');\n  return JSON.parse(jsonText);\n}\n\nfunction getCellValue(row, colIdx) {\n  if (colIdx === undefined || colIdx < 0) return null;\n  const cell = row?.c?.[colIdx];\n  return cell && cell.v !== null && cell.v !== undefined ? cell.v : null;\n}\n\nfunction toSnakeCase(value) {\n  return String(value || '')\n    .trim()\n    .toLowerCase()\n    .replace(/[^a-z0-9]+/g, '_')\n    .replace(/^_+|_+$/g, '');\n}\n\nfunction parseSheetRows(raw) {\n  if (!raw) return [];\n  const table = parseGvizText(raw).table || {};\n  const cols = table.cols || [];\n  const rows = table.rows || [];\n  if (!rows.length) return [];\n\n  const colHeaders = cols.map((col) => toSnakeCase(col?.label));\n  const hasColHeaders = colHeaders.some((header) => header);\n  const headerRow = rows[0];\n  const rowHeaders = (headerRow?.c || []).map((_, index) => toSnakeCase(getCellValue(headerRow, index)));\n  const headers = hasColHeaders ? colHeaders : rowHeaders;\n  const dataRows = hasColHeaders ? rows : rows.slice(1);\n\n  return dataRows.map((row) => {\n    const item = {};\n    headers.forEach((header, index) => {\n      if (!header) return;\n      item[header] = getCellValue(row, index);\n    });\n    return item;\n  }).filter((item) => Object.values(item).some((value) => value !== null && value !== ''));\n}\n\nconst tradeLogRows = parseSheetRows(rawText);\nreturn [{ json: { trade_log_rows: tradeLogRows, total_rows: tradeLogRows.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        112,
+        48
+      ],
+      "id": "65fdced7-4034-4da2-9ac6-a1f318bdcabf",
+      "name": "Parse TRADE_LOG"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger 5 Menit": {
+      "main": [
+        [
+          {
+            "node": "Ambil Harga PAXG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Harga PAXG": {
+      "main": [
+        [
+          {
+            "node": "Ambil Kurs USDT/IDR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Kurs USDT/IDR": {
+      "main": [
+        [
+          {
+            "node": "Baca Sheet SETTINGS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Baca Sheet SETTINGS": {
+      "main": [
+        [
+          {
+            "node": "Parse SETTINGS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Baca Sheet TRADE_LOG": {
+      "main": [
+        [
+          {
+            "node": "Parse TRADE_LOG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Main Logic — Alert & Draft Thread": {
+      "main": [
+        [
+          {
+            "node": "Perlu Alert?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Dashboard Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Perlu Alert?": {
+      "main": [
+        [
+          {
+            "node": "Kirim Ke Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Dashboard Rows": {
+      "main": [
+        [
+          {
+            "node": "Update Dashboard Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse SETTINGS": {
+      "main": [
+        [
+          {
+            "node": "Baca Sheet TRADE_LOG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse TRADE_LOG": {
+      "main": [
+        [
+          {
+            "node": "Main Logic — Alert & Draft Thread",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "d89121ac-5037-4aae-a105-d475ff7aaec9",
+  "meta": {
+    "instanceId": "72a80edf5b86ed56433d12a90231f95d07fc878d856e276201384eb5c08a3e7b"
+  },
+  "id": "G4O30vUHN9bMpyOj",
+  "tags": []
+}
