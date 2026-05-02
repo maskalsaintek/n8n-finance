@@ -1121,16 +1121,20 @@ function fmt(value, decimals = 2) {
   return Number(value).toFixed(decimals);
 }
 
-module.exports = {
-  DEFAULT_CONFIG,
-  runMainLogic,
-  buildTradingContext,
-  evaluateSignals,
-  buildDrafts,
-  buildTradeLogRow,
-  buildDashboardMetrics,
-  parseSettingsSheet,
-  parseTradeLogSheet,
-  summarizePortfolio,
-  summarizeCycle,
+// n8n entrypoint
+const market = {
+  paxgUsd: $('Ambil Harga PAXG').first()?.json?.price,
+  usdtIdr: $('Ambil Kurs USDT/IDR').first()?.json?.price,
 };
+
+const settingsData = $('Parse SETTINGS').first()?.json?.settings || {};
+const tradeLogRows = $('Parse TRADE_LOG').first()?.json?.trade_log_rows || [];
+const output = runMainLogic({
+  market,
+  settingsData,
+  tradeLogRows,
+  staticData: $getWorkflowStaticData('global'),
+  now: new Date(),
+});
+
+return output;
